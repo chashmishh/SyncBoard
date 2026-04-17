@@ -7,7 +7,7 @@ import UserList from "./components/UserList";
 import LoginForm from "./components/LoginForm";
 import CursorOverlay from "./components/CursorOverlay";
 
-const socket = io("http://localhost:5000");
+const socket = io(process.env.REACT_APP_SERVER_URL);
 
 // ── Keyboard shortcut hook ────────────────────────────────────────────────────
 function useKeyboardShortcuts(onUndo, onRedo) {

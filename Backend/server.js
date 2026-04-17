@@ -10,7 +10,7 @@ const server = http.createServer(app);
 
 const io = socketio(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: process.env.CLIENT_URL,
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -144,4 +144,4 @@ app.get("/api/health", (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+server.listen(PORT, "0.0.0.0", () => console.log(`Backend running on port ${PORT}`));

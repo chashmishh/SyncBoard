@@ -126,7 +126,7 @@ function CanvasBoard({ socket, tool, color, strokeSize, onUndo, onRedo, onExport
       canvas.width = canvas.parentElement.clientWidth;
       canvas.height = canvas.parentElement.clientHeight;
       const ctx = canvas.getContext("2d");
-      ctx.fillStyle = "#09090b"; // zinc-900 dark canvas bg
+      ctx.fillStyle = "#18181b"; // zinc-900 dark canvas bg
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
@@ -174,7 +174,7 @@ function CanvasBoard({ socket, tool, color, strokeSize, onUndo, onRedo, onExport
       if (!ctx) return;
 
       if (data.tool === "eraser") {
-        eraseLine(ctx, data.x0, data.y0, data.x1, data.y1);
+        eraseLine(ctx, data.x0, data.y0, data.x1, data.y1, data.size);
       } else if (SHAPE_TOOLS.includes(data.tool)) {
         drawShape(ctx, data.tool, { x: data.x0, y: data.y0 }, { x: data.x1, y: data.y1 }, data.color, data.size);
       } else if (data.tool === "text") {
@@ -205,42 +205,72 @@ function CanvasBoard({ socket, tool, color, strokeSize, onUndo, onRedo, onExport
 
   // ── Mouse cursor emit ──────────────────────────────────────────────────────
   const lastEmit = useRef(0);
+  const getPoint = useCallback((e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+
+    // Support both mouse and touch by converting to canvas-local coordinates.
+    if (e.touches?.length) {
+      const touch = e.touches[0];
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: touch.clientX - rect.left,
+        y: touch.clientY - rect.top,
+      };
+    }
+
+    if (typeof e.nativeEvent?.offsetX === "number" && typeof e.nativeEvent?.offsetY === "number") {
+      return {
+        x: e.nativeEvent.offsetX,
+        y: e.nativeEvent.offsetY,
+      };
+    }
+
+    return null;
+  }, []);
+
   const emitCursor = useCallback((e) => {
     const now = Date.now();
     if (now - lastEmit.current < 32) return;
     lastEmit.current = now;
+    const point = getPoint(e);
+    if (!point) return;
     socket.emit("cursor-move", {
-      x: e.nativeEvent.offsetX,
-      y: e.nativeEvent.offsetY,
+      x: point.x,
+      y: point.y,
       name: userName,
       color: userColor,
     });
-  }, [socket]);
+  }, [socket, getPoint, userName, userColor]);
 
   // ── Drawing ────────────────────────────────────────────────────────────────
   const startDrawing = (e) => {
     if (user?.role === "viewer") return;
-    const { offsetX, offsetY } = e.nativeEvent;
+    const point = getPoint(e);
+    if (!point) return;
+    const { x, y } = point;
 
     if (tool === "text") {
-      setTextInput({ x: offsetX, y: offsetY });
+      setTextInput({ x, y });
       return;
     }
 
     setDrawing(true);
-    setLastPos({ x: offsetX, y: offsetY });
-    setShapeStart({ x: offsetX, y: offsetY });
+    setLastPos({ x, y });
+    setShapeStart({ x, y });
 
     if (!SHAPE_TOOLS.includes(tool)) {
       ctxRef.current.beginPath();
-      ctxRef.current.moveTo(offsetX, offsetY);
+      ctxRef.current.moveTo(x, y);
     }
   };
 
   const draw = (e) => {
     emitCursor(e);
     if (!drawing || user?.role === "viewer") return;
-    const { offsetX, offsetY } = e.nativeEvent;
+    const point = getPoint(e);
+    if (!point) return;
+    const { x, y } = point;
     const ctx = ctxRef.current;
     if (!ctx || !lastPos) return;
 
@@ -249,39 +279,38 @@ function CanvasBoard({ socket, tool, color, strokeSize, onUndo, onRedo, onExport
       const oc = overlayRef.current?.getContext("2d");
       if (oc) {
         oc.clearRect(0, 0, overlayRef.current.width, overlayRef.current.height);
-        drawShape(oc, tool, shapeStart, { x: offsetX, y: offsetY }, color, strokeSize);
+        drawShape(oc, tool, shapeStart, { x, y }, color, strokeSize);
       }
       return;
     }
 
     if (tool === "eraser") {
-      eraseLine(ctx, lastPos.x, lastPos.y, offsetX, offsetY);
-      socket.emit("draw", { x0: lastPos.x, y0: lastPos.y, x1: offsetX, y1: offsetY, tool: "eraser", color, size: strokeSize });
+      eraseLine(ctx, lastPos.x, lastPos.y, x, y, strokeSize);
+      socket.emit("draw", { x0: lastPos.x, y0: lastPos.y, x1: x, y1: y, tool: "eraser", color, size: strokeSize });
     } else {
       ctx.globalCompositeOperation = "source-over";
       ctx.strokeStyle = color;
       ctx.lineWidth = strokeSize;
       ctx.beginPath();
       ctx.moveTo(lastPos.x, lastPos.y);
-      ctx.lineTo(offsetX, offsetY);
+      ctx.lineTo(x, y);
       ctx.stroke();
       ctx.closePath();
-      socket.emit("draw", { x0: lastPos.x, y0: lastPos.y, x1: offsetX, y1: offsetY, tool, color, size: strokeSize });
+      socket.emit("draw", { x0: lastPos.x, y0: lastPos.y, x1: x, y1: y, tool, color, size: strokeSize });
     }
 
-    setLastPos({ x: offsetX, y: offsetY });
+    setLastPos({ x, y });
   };
 
   const stopDrawing = (e) => {
     if (!drawing) return;
     setDrawing(false);
-    setLastPos(null);
     ctxRef.current?.closePath();
 
-    if (SHAPE_TOOLS.includes(tool) && shapeStart && e) {
-      const { offsetX, offsetY } = e.nativeEvent;
-      drawShape(ctxRef.current, tool, shapeStart, { x: offsetX, y: offsetY }, color, strokeSize);
-      socket.emit("draw", { x0: shapeStart.x, y0: shapeStart.y, x1: offsetX, y1: offsetY, tool, color, size: strokeSize });
+    const point = getPoint(e) || lastPos;
+    if (SHAPE_TOOLS.includes(tool) && shapeStart && point) {
+      drawShape(ctxRef.current, tool, shapeStart, { x: point.x, y: point.y }, color, strokeSize);
+      socket.emit("draw", { x0: shapeStart.x, y0: shapeStart.y, x1: point.x, y1: point.y, tool, color, size: strokeSize });
 
       // Clear overlay
       const oc = overlayRef.current?.getContext("2d");
@@ -289,6 +318,7 @@ function CanvasBoard({ socket, tool, color, strokeSize, onUndo, onRedo, onExport
     }
 
     push(); // snapshot for undo
+    setLastPos(null);
     setShapeStart(null);
   };
 
@@ -311,7 +341,7 @@ function CanvasBoard({ socket, tool, color, strokeSize, onUndo, onRedo, onExport
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#09090b";
+    ctx.fillStyle = "#18181b";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   };
 
@@ -330,11 +360,27 @@ function CanvasBoard({ socket, tool, color, strokeSize, onUndo, onRedo, onExport
       <canvas
         ref={canvasRef}
         className="absolute inset-0"
-        style={{ cursor: cursorStyle }}
+        style={{ cursor: cursorStyle, touchAction: "none" }}
         onMouseDown={startDrawing}
         onMouseMove={draw}
         onMouseUp={stopDrawing}
         onMouseLeave={stopDrawing}
+        onTouchStart={(e) => {
+          e.preventDefault();
+          startDrawing(e);
+        }}
+        onTouchMove={(e) => {
+          e.preventDefault();
+          draw(e);
+        }}
+        onTouchEnd={(e) => {
+          e.preventDefault();
+          stopDrawing(e);
+        }}
+        onTouchCancel={(e) => {
+          e.preventDefault();
+          stopDrawing(e);
+        }}
       />
 
       {/* Shape preview overlay (transparent, pointer-events blocked) */}
